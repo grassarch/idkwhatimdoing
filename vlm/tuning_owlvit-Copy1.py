@@ -286,7 +286,7 @@ class BoxUtils(object):
         area = wh[:, :, 0] * wh[:, :, 1]
 
         return iou - (area - union) / area
-
+    
 class HungarianMatcher(nn.Module):
     """This class computes an assignment between the targets and the predictions of the network
     For efficiency reasons, the targets don't include the no_object. Because of this, in general,
@@ -395,50 +395,20 @@ class SetCriterion(nn.Module):
         """
         logging.info(f"loss_labels - {outputs.keys()}")
         assert 'logits' in outputs
-        src_logits = torch.abs(outputs['logits'])
+        src_logits = outputs['logits']
         device = src_logits.device
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["class_labels"][J] for t, (_, J) in zip(targets, indices)]).to(torch.int64)
         #remember to subtract to ensure that we have 0 to x-1 as label for x classes
         target_classes = torch.full(src_logits.shape[:2], self.num_classes-1,
                                     dtype=torch.int64, device=device).to(torch.int64)
-        target_classes[idx] = target_classes_o
-        #Expand our tensors to match batch_sizen
-        src_logits = src_logits.transpose(1, 2)
-        #we set the last class to be the bg
-        not_bg = (target_classes != self.num_classes-1).unsqueeze(1).expand(-1, self.num_classes, -1)
-        bg = (target_classes == self.num_classes-1).unsqueeze(1).expand(-1, self.num_classes, -1)
-        # Apply the mask to the tensor 
-        pred_logits = (src_logits * not_bg.float()).transpose(1, 2)
-        bg_logits = (src_logits * bg.float()).transpose(1, 2)
-
-        #pred_logits = src_logits[:, target_classes != 126].t()
-        #bg_logits = src_logits[:, target_classes == 126].t()
-        #target_classes = target_classes[target_classes != 126] # we already padded our classes with background
-
-        # Positive loss
-        pos_targets = torch.nn.functional.one_hot(target_classes, self.num_classes)
-        #print(pos_targets)
-        neg_targets = torch.zeros(bg_logits.shape).to(bg_logits.device)
-        #print(self.empty_weight.float().shape, pred_logits.float().shape,pos_targets.float().shape)
-        # import pickle
-        # with open("empty_weight.pkl", 'wb') as f:
-        #     pickle.dump(self.empty_weight.float(), f)
-        # with open("pred_log.pkl", 'wb') as f:
-        #     pickle.dump(pred_logits.float(), f)
-        # with open("pos_targets.pkl", 'wb') as f:
-        #     pickle.dump(pos_targets.float(), f)
-        # assert False
-        pos_loss = torch.nn.BCELoss(reduction="none", weight=self.empty_weight.float())(torch.nn.functional.softmax(pred_logits.float()), pos_targets.float())
-        neg_loss = torch.nn.BCELoss(reduction="none", weight=self.empty_weight.float())(torch.nn.functional.softmax(bg_logits.float()), neg_targets.float())
-
-        pos_loss = (torch.pow(1 - torch.exp(-pos_loss), 2) * pos_loss).sum(dim=1).mean()
-        neg_loss = (torch.pow(1 - torch.exp(-neg_loss), 2) * neg_loss).sum(dim=1).mean()
         
-        losses = {'loss_ce': pos_loss+neg_loss}
+        target_classes[idx] = target_classes_o
 
+        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        losses = {'loss_ce': loss_ce}
         return losses
-    
+
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, indices, num_boxes):
         """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
@@ -570,7 +540,7 @@ def main():
 
     print("Model loaded!")
     
-    model_output_dir = "owlvit-base-patch32_newversion"
+    model_output_dir = "owlvit-base-patch32_uvcs_thing_lol"
     
     transform_1 = vlm_data.map(transform_aug_ann, batched=True, batch_size=16)
     transform_2 = vlm_data.map(transform_aug_ann_labels, batched=True, batch_size=16)
