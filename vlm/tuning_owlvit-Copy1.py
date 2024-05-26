@@ -400,14 +400,50 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["class_labels"][J] for t, (_, J) in zip(targets, indices)]).to(torch.int64)
         #remember to subtract to ensure that we have 0 to x-1 as label for x classes
-        target_classes = torch.full(src_logits.shape[:2], self.num_classes-1,
+        target_classes = torch.full(src_logits.shape[:2], -1,
                                     dtype=torch.int64, device=device).to(torch.int64)
         
         target_classes[idx] = target_classes_o
+        pn_loss = self.idk_what_im_doing(src_logits.transpose(1, 2), target_classes)
 
-        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
-        losses = {'loss_ce': loss_ce}
+        #loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        losses = {'loss_ce': pn_loss}
         return losses
+        def idk_what_im_doing(self, src_logit, targets, pos_w=1, neg_w=0.1):
+        """
+        src_logits will be of shape batch_sizexnum_queriesxnum_classes
+        targets will be of shape batch_sizexnum_queries in range [-1, num_classes-1]
+        we treat stuff thats not inserted as the background class
+        """
+        positive_losses = []
+        negative_losses = []
+    
+        for logit, target in zip(src_logit, targets):
+           positive_loss, negative_loss = self.compute_per_instance_loss(logit, target)
+           positive_losses.append(positive_loss)
+           negative_losses.append(negative_loss)
+        p_loss = torch.mean(torch.stack(positive_losses), dim=0)*pos_w
+        n_loss = torch.mean(torch.stack(negative_losses), dim=0)*neg_w
+        #Honestly idk what im doing
+        return p_loss+n_loss
+            
+    
+    def compute_per_instance_loss(self, src_logit, target):
+        postive_idx = (target!=-1)
+        negative_idx = (target==-1)
+        positive_examples = src_logit[postive_idx]
+        negative_examples = src_logit[negative_idx]
+        positive_labels = target[postive_idx]
+        negative_labels = torch.zeros(negative_examples.shape)
+        positive_loss = torch.nn.functional.cross_entropy(positive_examples, positive_labels.type(torch.LongTensor))
+        negative_loss = torch.nn.functional.binary_cross_entropy(negative_examples, negative_labels.float())
+        if positive_loss.isnan():
+            #In the event that no predictions are made at all, background loss will help us settle that
+            positive_loss = torch.tensor(0)
+        if negative_loss.isnan():
+            #In the event that there are no background predictions(although its never happening unless I do something funny), losses are purely based on CE
+            negative_loss = torch.tensor(0)
+        return positive_loss, negative_loss
 
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, indices, num_boxes):
