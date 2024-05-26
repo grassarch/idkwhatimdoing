@@ -404,12 +404,12 @@ class SetCriterion(nn.Module):
                                     dtype=torch.int64, device=device).to(torch.int64)
         
         target_classes[idx] = target_classes_o
-        pn_loss = self.idk_what_im_doing(src_logits.transpose(1, 2), target_classes)
+        pn_loss = self.idk_what_im_doing(src_logits.clone().detach(), target_classes.clone().detach())
 
         #loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
         losses = {'loss_ce': pn_loss}
         return losses
-        def idk_what_im_doing(self, src_logit, targets, pos_w=1, neg_w=0.1):
+    def idk_what_im_doing(self, src_logit, targets, pos_w=1, neg_w=0.1):
         """
         src_logits will be of shape batch_sizexnum_queriesxnum_classes
         targets will be of shape batch_sizexnum_queries in range [-1, num_classes-1]
@@ -417,11 +417,11 @@ class SetCriterion(nn.Module):
         """
         positive_losses = []
         negative_losses = []
-    
+
         for logit, target in zip(src_logit, targets):
-           positive_loss, negative_loss = self.compute_per_instance_loss(logit, target)
-           positive_losses.append(positive_loss)
-           negative_losses.append(negative_loss)
+            positive_loss, negative_loss = self.compute_per_instance_loss(logit, target)
+            positive_losses.append(positive_loss)
+            negative_losses.append(negative_loss)
         p_loss = torch.mean(torch.stack(positive_losses), dim=0)*pos_w
         n_loss = torch.mean(torch.stack(negative_losses), dim=0)*neg_w
         #Honestly idk what im doing
@@ -435,8 +435,8 @@ class SetCriterion(nn.Module):
         negative_examples = src_logit[negative_idx]
         positive_labels = target[postive_idx]
         negative_labels = torch.zeros(negative_examples.shape)
-        positive_loss = torch.nn.functional.cross_entropy(positive_examples, positive_labels.type(torch.LongTensor))
-        negative_loss = torch.nn.functional.binary_cross_entropy(negative_examples, negative_labels.float())
+        positive_loss = torch.nn.functional.cross_entropy(positive_examples.cuda(), positive_labels.type(torch.LongTensor).cuda())
+        negative_loss = torch.nn.functional.binary_cross_entropy_with_logits(negative_examples.cuda(), negative_labels.float().cuda())
         if positive_loss.isnan():
             #In the event that no predictions are made at all, background loss will help us settle that
             positive_loss = torch.tensor(0)
@@ -601,7 +601,6 @@ def main():
                                         push_to_hub=False,
                                         report_to=["tensorboard"],
                                         dataloader_num_workers=2,
-                                        gradient_checkpointing_kwargs={"use_reentrant": False},
                                         )
     trainer = CustomTrainer(
                             model=model,
